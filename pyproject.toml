@@ -1,0 +1,127 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "raglan-retrieval"
+version = "0.1.0"
+description = "A lightweight, highly configurable RAG retrieval engine. Framework-free, protocol-driven."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Gushuchun" },
+]
+keywords = ["rag", "retrieval", "search", "bm25", "vector-search", "reranker", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+]
+requires-python = ">=3.10"
+
+# Core dependencies — zero mandatory installs beyond the stdlib
+dependencies = []
+
+# Optional dependency groups — install with pip install raglan-retrieval[openai] etc.
+[project.optional-dependencies]
+openai = ["openai>=1.0.0"]
+pgvector = ["asyncpg>=0.29.0"]
+chromadb = ["chromadb>=0.5.0"]
+qdrant = ["qdrant-client>=1.13.0"]
+cohere = ["cohere>=5.0.0"]
+huggingface = ["sentence-transformers>=3.0.0"]
+dashscope = ["dashscope>=1.17.0"]
+litellm = ["litellm>=1.0.0"]
+tiktoken = ["tiktoken>=0.5"]
+
+all = [
+    "openai>=1.0.0",
+    "asyncpg>=0.29.0",
+    "chromadb>=0.5.0",
+    "qdrant-client>=1.13.0",
+    "cohere>=5.0.0",
+    "sentence-transformers>=3.0.0",
+    "dashscope>=1.17.0",
+    "litellm>=1.0.0",
+    "tiktoken>=0.5",
+]
+
+dev = [
+    "numpy",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pytest-xdist>=3.0",
+    "hypothesis>=6.100",
+    "mypy>=1.10",
+    "ruff>=0.5",
+    "build>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Gushuchun/RAGLAN"
+Documentation = "https://github.com/Gushuchun/RAGLAN/tree/master/docs"
+Repository = "https://github.com/Gushuchun/RAGLAN"
+Issues = "https://github.com/Gushuchun/RAGLAN/issues"
+Changelog = "https://github.com/Gushuchun/RAGLAN/blob/master/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["raglan"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"raglan/py.typed" = "raglan/py.typed"
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+ignore_missing_imports = true
+follow_imports = "silent"
+exclude = ["^build/", "^dist/", "^tests/", "^benchmark/"]
+warn_unreachable = true
+warn_unused_ignores = false
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = [".git", "__pycache__", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific rules
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short --strict-markers"
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning:chromadb.*",
+    "ignore::pytest.PytestRemovedIn10Warning",
+]

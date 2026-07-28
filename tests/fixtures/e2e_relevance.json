@@ -1,0 +1,64 @@
+{
+  "description": "Relevance judgments for e2e test queries. Each query maps to chunk_ids considered relevant (ground truth based on actual document structure).",
+  "judgments": {
+    "q001": {
+      "label": "chunking strategies",
+      "relevant": [
+        "parent_008", "parent_008_c00", "parent_008_c01", "parent_008_c02",
+        "parent_009", "parent_009_c00", "parent_009_c01", "parent_009_c02",
+        "parent_010", "parent_010_c00", "parent_010_c01", "parent_010_c02",
+        "parent_011", "parent_011_c00", "parent_011_c01"
+      ]
+    },
+    "q002": {
+      "label": "embedding models",
+      "relevant": [
+        "parent_012", "parent_012_c00", "parent_012_c01",
+        "parent_013", "parent_013_c00",
+        "parent_014", "parent_014_c00", "parent_014_c01", "parent_014_c02"
+      ]
+    },
+    "q003": {
+      "label": "hybrid retrieval",
+      "relevant": [
+        "parent_016", "parent_016_c00", "parent_016_c01",
+        "parent_017", "parent_017_c00",
+        "parent_018", "parent_018_c00",
+        "parent_019", "parent_019_c00"
+      ]
+    },
+    "q004": {
+      "label": "reranking purpose",
+      "relevant": [
+        "parent_020", "parent_020_c00", "parent_020_c01",
+        "parent_032", "parent_032_c00", "parent_032_c01"
+      ]
+    },
+    "q005": {
+      "label": "hallucination solutions",
+      "relevant": [
+        "parent_030", "parent_030_c00",
+        "parent_033", "parent_033_c00", "parent_033_c01"
+      ]
+    },
+    "q006": {
+      "label": "vector databases",
+      "relevant": [
+        "parent_015", "parent_015_c00", "parent_015_c01", "parent_015_c02", "parent_015_c03"
+      ]
+    },
+    "q007": {
+      "label": "RAG evaluation",
+      "relevant": [
+        "parent_022", "parent_022_c00", "parent_022_c01",
+        "parent_023", "parent_023_c00",
+        "parent_024", "parent_024_c00",
+        "parent_025", "parent_025_c00",
+        "parent_026", "parent_026_c00",
+        "parent_027", "parent_027_c00",
+        "parent_028", "parent_028_c00",
+        "parent_029", "parent_029_c00"
+      ]
+    }
+  }
+}
