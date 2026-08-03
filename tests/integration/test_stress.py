@@ -44,7 +44,7 @@ async def test_bm25_large_index():
 
     await bm.index(gen())
 
-    assert bm._doc_count == batch_size * num_batches
+    assert bm._index._doc_count == batch_size * num_batches
 
     # Search should still work correctly
     results = await bm.retrieve(["varied content"], [], top_k=5)
@@ -90,7 +90,7 @@ async def test_bm25_incremental_add_stress():
     for i in range(200):
         await bm.add([(f"d{i}", f"incremental document {i}", None)])
 
-    assert bm._doc_count == 201
+    assert bm._index._doc_count == 201
 
     # Search should still work
     results = await bm.retrieve(["incremental document 150"], [], top_k=3)

@@ -57,6 +57,23 @@ Any of the pipeline stages can be:
 - **Replaced**: Provide a different implementation (e.g., swap BM25 for Elasticsearch)
 - **Extended**: Wrap with middleware (timeout, retry, circuit breaker)
 
+Custom components can be registered for config-driven construction:
+
+```python
+from raglan import register_component
+
+register_component("my_retriever", MyRetriever)
+rag = Raglan.from_dict({"retrievers": [{"type": "my_retriever", "params": {...}}]})
+```
+
+Stages may also expose an optional `async def warm_up()` for eager
+initialisation (e.g. pre-loading a Cross-Encoder model). Call it through the
+facade during startup:
+
+```python
+await rag.warm_up()  # pre-loads any stage that supports it
+```
+
 ```python
 # Minimal: BM25 only — direct instantiation
 rag = Raglan([BM25Retriever()])
@@ -134,7 +151,18 @@ PipelineContext (mutable state bag flowing through stages)
   │
   ▼
 Output: (list[SearchResult], Trace)
+  ├── Trace.total_ms           # End-to-end latency
+  ├── Trace.stage_timings      # Per-stage timings
+  ├── Trace.expanded_queries   # Stage 1 variants (non-minimal level)
+  ├── Trace.entities           # Extracted entities (non-minimal level)
+  ├── Trace.retriever_hits     # Per-retriever hit counts (non-minimal)
+  └── Trace.degradations       # Skipped/failed stages
 ```
+
+> **Trace level filtering.** `Trace` carries intermediate results
+> (`expanded_queries`, `entities`, `retriever_hits`) only when
+> `trace_level != "minimal"`. Configure it at construction time or override
+> per request via `Raglan.search(..., trace_level=...)`.
 
 ```python
 @dataclass

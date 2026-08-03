@@ -15,7 +15,7 @@ from raglan.exceptions import (
 )
 from raglan.observability import LoggingMetricsCollector, NoOpMetricsCollector
 from raglan.pipeline import Pipeline
-from raglan.raglan import Raglan, RaglanBuilder
+from raglan.raglan import Raglan, RaglanBuilder, register_component
 from raglan.types import (
     Filter,
     Op,
@@ -56,4 +56,5 @@ __all__ = [
     "TimeoutError",
     "Trace",
     "TraceLevel",
+    "register_component",
 ]

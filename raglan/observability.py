@@ -40,6 +40,10 @@ class NoOpMetricsCollector:
     ) -> None:
         pass
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise the collector for ``export_config()``."""
+        return {"type": self.name, "params": {}}
+
 
 class LoggingMetricsCollector:
     """Metrics collector that logs pipeline activity via Python logging.
@@ -112,3 +116,7 @@ class LoggingMetricsCollector:
                 stage_name,
                 elapsed_ms,
             )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise the collector for ``export_config()``."""
+        return {"type": self.name, "params": {"log_queries": self._log_queries}}

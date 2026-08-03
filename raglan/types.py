@@ -244,6 +244,10 @@ class Trace:
     stage_timings: list[StageTiming] = field(default_factory=list)
     degradations: list[StageDegradation] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Intermediate results, populated when trace_level != "minimal".
+    expanded_queries: list[str] = field(default_factory=list)
+    entities: dict[str, Any] = field(default_factory=dict)
+    retriever_hits: dict[str, int] = field(default_factory=dict)
 
     # --- convenience ---------------------------------------------------------
 

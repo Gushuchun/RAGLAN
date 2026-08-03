@@ -202,5 +202,11 @@ Trace
 ├── .stage_timings[]        # per-stage {stage, elapsed_ms}
 ├── .degradations[]         # {stage, error} for failed stages
 ├── .degraded               # True if any stage failed
-└── .metadata               # user-provided metadata
+├── .metadata               # user-provided metadata
+├── .expanded_queries[]     # Stage 1 variants (non-minimal level)
+├── .entities{}             # Stage 1 extracted entities (non-minimal)
+└── .retriever_hits{}       # per-retriever hit counts (non-minimal)
 ```
+
+The three last fields are populated only when `trace_level != "minimal"`.
+Override per request with `rag.search(q, trace_level="full")` for debugging.

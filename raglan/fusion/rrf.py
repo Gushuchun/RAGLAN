@@ -53,6 +53,7 @@ class RRFFusion:
         chunk_scores: dict[str, float] = {}
         chunk_content: dict[str, str] = {}
         chunk_parent: dict[str, str] = {}
+        chunk_meta: dict[str, dict[str, Any]] = {}
 
         # Count retrievers by type for correct per-type weight normalisation.
         sparse_count = sum(1 for name in retriever_results if "bm25" in name.lower())
@@ -78,6 +79,8 @@ class RRFFusion:
                     chunk_scores[cid] = chunk_scores.get(cid, 0.0) + weighted
                     chunk_content[cid] = chunk.content
                     chunk_parent[cid] = chunk.parent_chunk_id or cid
+                    if chunk.chunk_metadata:
+                        chunk_meta[cid] = chunk.chunk_metadata
 
         # Deduplicate by parent chunk — keep only the highest-scoring child
         parent_best: dict[str, tuple[str, float]] = {}
@@ -93,6 +96,7 @@ class RRFFusion:
                 content=chunk_content[cid],
                 score=score,
                 parent_chunk_id=chunk_parent.get(cid),
+                chunk_metadata=chunk_meta.get(cid, {}),
                 source="fused",
             )
             for cid, score in ranked

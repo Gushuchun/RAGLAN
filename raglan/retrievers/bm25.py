@@ -1,30 +1,27 @@
-"""Pure-Python BM25 retriever with zero external dependencies.
+"""BM25 sparse retriever — a thin wrapper around a pluggable :class:`SparseIndex`.
 
-Implements Okapi BM25 (``k1=1.5``, ``b=0.75``) with a built-in tokenizer
-that handles both English (whitespace) and Chinese (bigram) text.
-All mutation methods are protected by an ``asyncio.Lock`` for safe
-concurrent use in production deployments.
+The default backend is the pure-Python :class:`MemorySparseIndex` (Okapi BM25,
+zero external dependencies, CJK-aware tokenizer).  Pass a custom ``index``
+implementing the :class:`SparseIndex` protocol to plug in an external engine
+such as Elasticsearch or meilisearch.
 """
 
 from __future__ import annotations
 
-import asyncio
-import heapq
 import logging
-import math
-from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from raglan.retrievers.sparse import MemorySparseIndex, SparseIndex
 from raglan.types import Filter, ScoredChunk
 
 
 class BM25Retriever:
-    """BM25 sparse retriever backed by an in-memory inverted index.
+    """BM25 sparse retriever backed by a configurable sparse index.
 
-    Suitable for corpora up to ~1 million documents on commodity hardware.
-    For larger collections, implement the ``Retriever`` protocol against
-    Elasticsearch or a similar search engine.
+    Suitable for corpora up to ~1 million documents on commodity hardware with
+    the default in-memory backend.  For larger collections, pass a custom
+    ``index`` backed by Elasticsearch or a similar engine.
 
     Parameters
     ----------
@@ -40,85 +37,12 @@ class BM25Retriever:
     stopwords:
         Optional set of lowercase words to exclude from the index.
         When ``None`` a small built-in English stopword set is used.
+    index:
+        A :class:`SparseIndex` backend.  Defaults to :class:`MemorySparseIndex`.
     """
 
     name = "bm25"
     requires_embeddings = False
-
-    _DEFAULT_STOPWORDS: frozenset[str] = frozenset(
-        {
-            "a",
-            "an",
-            "the",
-            "and",
-            "or",
-            "but",
-            "in",
-            "on",
-            "at",
-            "to",
-            "for",
-            "of",
-            "with",
-            "by",
-            "from",
-            "is",
-            "are",
-            "was",
-            "were",
-            "be",
-            "been",
-            "being",
-            "have",
-            "has",
-            "had",
-            "do",
-            "does",
-            "did",
-            "will",
-            "would",
-            "could",
-            "should",
-            "may",
-            "might",
-            "can",
-            "shall",
-            "it",
-            "its",
-            "this",
-            "that",
-            "these",
-            "those",
-            "i",
-            "you",
-            "he",
-            "she",
-            "we",
-            "they",
-            "me",
-            "him",
-            "her",
-            "us",
-            "them",
-            "my",
-            "your",
-            "his",
-            "our",
-            "their",
-            "not",
-            "no",
-            "nor",
-            "so",
-            "if",
-            "then",
-            "than",
-            "too",
-            "very",
-            "just",
-            "about",
-            "also",
-        }
-    )
 
     def __init__(
         self,
@@ -127,24 +51,23 @@ class BM25Retriever:
         b: float = 0.75,
         tokenizer: Callable[[str], list[str]] | None = None,
         stopwords: set[str] | None = None,
+        index: SparseIndex | None = None,
     ) -> None:
         self._k1 = k1
         self._b = b
-        self._tokenizer = tokenizer or self._builtin_tokenizer
-        self._stopwords = stopwords if stopwords is not None else self._DEFAULT_STOPWORDS
-        self._lock = asyncio.Lock()
+        self._tokenizer = tokenizer
+        self._stopwords = stopwords
+        self._index: SparseIndex = index or MemorySparseIndex(
+            k1=k1, b=b, tokenizer=tokenizer, stopwords=stopwords
+        )
 
-        # Per-document data: chunk_id -> (content, term-frequency dict)
-        self._docs: dict[str, tuple[str, dict[str, int]]] = {}
-        # Inverted index: term -> {chunk_id: term_frequency}
-        self._inverted: dict[str, dict[str, int]] = defaultdict(dict)
-        # Average document length in tokens
-        self._avgdl: float = 0.0
-        # Total document count
-        self._doc_count: int = 0
+    @staticmethod
+    def _builtin_tokenizer(text: str) -> list[str]:
+        """The default CJK-aware tokenizer (delegates to MemorySparseIndex)."""
+        return MemorySparseIndex._builtin_tokenizer(text)
 
     # ------------------------------------------------------------------
-    # Public API — Retriever protocol
+    # Retriever protocol
     # ------------------------------------------------------------------
 
     async def retrieve(
@@ -158,7 +81,7 @@ class BM25Retriever:
         """Search for *top_k* chunks per query.
 
         *embeddings*, *filters*, and *timeout* are accepted for protocol
-        compatibility but are not used by BM25.
+        compatibility.  *filters* is not supported by the default backend.
         """
         if filters:
             logging.getLogger(__name__).warning(
@@ -166,166 +89,28 @@ class BM25Retriever:
                 "filters will be ignored. Use a dense retriever for "
                 "filtered search."
             )
-        async with self._lock:
-            results: list[list[ScoredChunk]] = []
-            for query in queries:
-                query_tokens = [t for t in self._tokenizer(query) if t not in self._stopwords]
-                scores: dict[str, float] = {}
-
-                for token in set(query_tokens):
-                    idf = self._idf(token)
-                    if idf == 0.0:
-                        continue
-                    for doc_id, tf in self._inverted.get(token, {}).items():
-                        dl = len(self._docs[doc_id][1])
-                        score = idf * self._tf_component(tf, dl)
-                        scores[doc_id] = scores.get(doc_id, 0.0) + score
-
-                top_items = heapq.nlargest(
-                    min(top_k, len(scores)), scores.items(), key=lambda x: x[1]
-                )
-                results.append(
-                    [
-                        ScoredChunk(
-                            chunk_id=doc_id,
-                            content=self._docs[doc_id][0],
-                            score=scores[doc_id],
-                            source=self.name,
-                        )
-                        for doc_id, _ in top_items
-                    ]
-                )
-
-            return results
+        results: list[list[ScoredChunk]] = []
+        for query in queries:
+            chunks = await self._index.search(query, top_k)
+            for c in chunks:
+                c.source = self.name
+            results.append(chunks)
+        return results
 
     async def index(
         self,
         chunks: AsyncIterator[list[tuple[str, str, dict[str, Any] | None]]],
     ) -> None:
-        """Build the inverted index from a stream of chunk batches.
-
-        Uses a double-buffer strategy: the new index is built off to the
-        side and swapped in atomically, so concurrent ``retrieve()`` calls
-        continue to see the old index.
-        """
-        new_docs: dict[str, tuple[str, dict[str, int]]] = {}
-        new_inverted: dict[str, dict[str, int]] = defaultdict(dict)
-        total_tokens = 0
-        doc_count = 0
-
-        async for batch in chunks:
-            for item in batch:
-                chunk_id, content = item[0], item[1]
-                tokens = [t for t in self._tokenizer(content) if t not in self._stopwords]
-                tf = self._count_terms(tokens)
-                new_docs[chunk_id] = (content, tf)
-                total_tokens += len(tokens)
-                doc_count += 1
-                for term, freq in tf.items():
-                    new_inverted[term][chunk_id] = freq
-
-        # Atomically swap
-        async with self._lock:
-            self._docs = new_docs
-            self._inverted = new_inverted
-            self._avgdl = total_tokens / max(1, doc_count)
-            self._doc_count = doc_count
+        """Build the index from a stream of chunk batches."""
+        await self._index.index(chunks)
 
     async def add(self, chunks: list[tuple[str, str, dict[str, Any] | None]]) -> None:
         """Incrementally add chunks to an existing index."""
-        async with self._lock:
-            total_dl = self._avgdl * self._doc_count
-            for item in chunks:
-                chunk_id, content = item[0], item[1]
-                tokens = [t for t in self._tokenizer(content) if t not in self._stopwords]
-                tf = self._count_terms(tokens)
-                self._docs[chunk_id] = (content, tf)
-                total_dl += len(tokens)
-                self._doc_count += 1
-                for term, freq in tf.items():
-                    self._inverted[term][chunk_id] = freq
-            self._avgdl = total_dl / max(1, self._doc_count)
+        await self._index.add(chunks)
 
     async def remove(self, chunk_ids: list[str]) -> None:
         """Incrementally remove chunks from the index."""
-        async with self._lock:
-            total_dl = self._avgdl * self._doc_count
-            for cid in chunk_ids:
-                if cid not in self._docs:
-                    continue
-                _content, tf = self._docs.pop(cid)
-                total_dl -= sum(tf.values())
-                self._doc_count -= 1
-                for term in tf:
-                    self._inverted[term].pop(cid, None)
-                    if not self._inverted[term]:
-                        del self._inverted[term]
-            self._avgdl = total_dl / max(1, self._doc_count)
-
-    # ------------------------------------------------------------------
-    # BM25 internals
-    # ------------------------------------------------------------------
-
-    def _idf(self, term: str) -> float:
-        doc_freq = len(self._inverted.get(term, {}))
-        if doc_freq == 0:
-            return 0.0
-        return math.log((self._doc_count - doc_freq + 0.5) / (doc_freq + 0.5) + 1.0)
-
-    def _tf_component(self, tf: int, doc_len: int) -> float:
-        numerator = tf * (self._k1 + 1.0)
-        denominator = tf + self._k1 * (1.0 - self._b + self._b * doc_len / max(1.0, self._avgdl))
-        return numerator / denominator
-
-    # ------------------------------------------------------------------
-    # Tokenization
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _count_terms(tokens: list[str]) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for t in tokens:
-            counts[t] = counts.get(t, 0) + 1
-        return counts
-
-    @staticmethod
-    def _is_cjk(c: str) -> bool:
-        """Check if a character is in the CJK Unified Ideographs block."""
-        return "一" <= c <= "鿿"
-
-    @staticmethod
-    def _is_cjk_extended(c: str) -> bool:
-        """Check if a character is in CJK Extended-A or compatible ranges."""
-        return "㐀" <= c <= "䶿" or "豈" <= c <= "﫿"
-
-    @classmethod
-    def _tokenize_cjk(cls, segment: str) -> list[str]:
-        """Tokenize a CJK segment using jieba if available, else bigram."""
-        try:
-            import jieba
-
-            return list(jieba.cut(segment))
-        except ImportError:
-            tokens: list[str] = []
-            for i in range(len(segment) - 1):
-                tokens.append(segment[i : i + 2])
-            tokens.append(segment)
-            return tokens
-
-    @classmethod
-    def _builtin_tokenizer(cls, text: str) -> list[str]:
-        """Auto-detect: split-based for English, jieba/bigram for CJK.
-
-        Mixed text is split by whitespace first, then each segment is
-        classified as CJK or Latin and tokenized accordingly.
-        """
-        tokens: list[str] = []
-        for word in text.lower().split():
-            if any(cls._is_cjk(c) or cls._is_cjk_extended(c) for c in word):
-                tokens.extend(cls._tokenize_cjk(word))
-            else:
-                tokens.append(word)
-        return tokens
+        await self._index.remove(chunk_ids)
 
     def to_dict(self) -> dict[str, Any]:
         return {

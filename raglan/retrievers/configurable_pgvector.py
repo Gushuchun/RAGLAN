@@ -33,6 +33,22 @@ def _validate_sql_identifier(name: str, label: str) -> None:
         )
 
 
+def _to_sqlalchemy_params(sql: str, params: list[Any]) -> tuple[str, dict[str, Any]]:
+    """Rewrite asyncpg positional params (``$1``, ``$2``, ...) as SQLAlchemy named params.
+
+    Returns ``(sql, {"p1": ..., "p2": ...})`` suitable for
+    ``session.execute(text(sql), named_params)``.
+
+    PostgreSQL ``:pN::type`` casts are rewritten to ``CAST(:pN AS type)``
+    because SQLAlchemy's ``text()`` mis-parses the ``::`` cast into a stray
+    bound parameter.
+    """
+    named_sql = re.sub(r"\$(\d+)", r":p\1", sql)
+    new_sql = re.sub(r":p(\d+)::(\w+)", r"CAST(:p\1 AS \2)", named_sql)
+    named = {f"p{i + 1}": params[i] for i in range(len(params))}
+    return new_sql, named
+
+
 class ConfigurablePgvectorRetriever:
     """A pgvector-backed retriever configured via column-name mappings.
 
@@ -83,6 +99,7 @@ class ConfigurablePgvectorRetriever:
         metadata_column: str | None = None,
         distance_metric: str = "cosine",
         connection_pool: Any | None = None,
+        session_factory: Any | None = None,
     ) -> None:
         if distance_metric not in self._DISTANCE_MAP:
             raise ValueError(
@@ -110,6 +127,11 @@ class ConfigurablePgvectorRetriever:
         self._dist_op = self._DISTANCE_MAP[distance_metric]
         self._pool: Any = connection_pool
         self._pool_lock = asyncio.Lock()
+
+        # SQLAlchemy async session factory — mutually exclusive with the
+        # asyncpg connection string / pool.
+        self._session_factory = session_factory
+        self._using_sqlalchemy = session_factory is not None
 
         # Lazy-init flag
         self._initialised = False
@@ -144,7 +166,7 @@ class ConfigurablePgvectorRetriever:
             )
             params = [vec_str, top_k, *filter_params]
 
-            rows = await self._pool.fetch(sql, *params, timeout=timeout)
+            rows = await self._fetch_all(sql, params, timeout=timeout)
             results.append(
                 [
                     ScoredChunk(
@@ -198,21 +220,29 @@ class ConfigurablePgvectorRetriever:
             f"WHERE c.{self._id_col} = ANY($1::text[])"
         )
 
-        rows = await self._pool.fetch(sql, chunk_ids)
-        return {str(r["child_id"]): str(r["parent_content"]) for r in rows}
+        rows = await self._fetch_all(sql, chunk_ids)
+        return {str(r[0]): str(r[1]) for r in rows}
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
     async def close(self) -> None:
-        """Close the connection pool and release all resources."""
+        """Close the connection pool and release all resources.
+
+        In SQLAlchemy mode the session factory is owned by the caller and is
+        not closed here.
+        """
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
             self._initialised = False
 
     async def _ensure_pool(self) -> None:
+        if self._using_sqlalchemy:
+            self._initialised = True
+            return
+
         if self._pool is not None:
             # asyncpg pools are loop-bound — recreate if the loop changed.
             # Only check actual asyncpg Pool objects (skip mocks/test objects).
@@ -238,6 +268,30 @@ class ConfigurablePgvectorRetriever:
 
             self._pool = await asyncpg.create_pool(self._conn_string, min_size=1, max_size=10)
             self._initialised = True
+
+    async def _fetch_all(
+        self, sql: str, params: list[Any], timeout: float | None = None
+    ) -> list[Any]:
+        """Execute *sql* and return rows indexable by position (``row[0]``).
+
+        Dispatches on the configured connection mode — asyncpg pool or
+        SQLAlchemy async session.
+        """
+        if not self._using_sqlalchemy:
+            return await self._pool.fetch(sql, *params, timeout=timeout)  # type: ignore[no-any-return]
+
+        from raglan._lazy import _import_module
+
+        _import_module("sqlalchemy", hint="pip install sqlalchemy")
+        from sqlalchemy import text
+
+        # Convert asyncpg positional params ($1, $2, ...) to SQLAlchemy named
+        # params (:p1, :p2, ...).
+        sqlalchemy_sql, named_params = _to_sqlalchemy_params(sql, params)
+        assert self._session_factory is not None
+        async with self._session_factory() as session:
+            result = await session.execute(text(sqlalchemy_sql), named_params)
+            return list(result.all())
 
     def _build_filter(
         self, filters: list[Filter] | None, base_param_count: int = 2

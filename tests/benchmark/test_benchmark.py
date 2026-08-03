@@ -57,7 +57,7 @@ class TestBM25Benchmark:
                 await bm.index(gen())
 
             asyncio.run(_index())
-            return bm._doc_count
+            return bm._index._doc_count
 
         result = benchmark(_do)
         assert result == 1000

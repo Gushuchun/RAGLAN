@@ -238,6 +238,17 @@ class Raglan:
                 with contextlib.suppress(Exception):
                     await closer()
 
+    async def warm_up(self) -> None:
+        """Pre-load any stage that supports it (rerankers, embedders).
+
+        Call once during application startup to avoid a slow first request
+        (e.g. model download for a Cross-Encoder reranker).
+        """
+        for stage in self._get_pipeline().iter_stages():
+            warmer = getattr(stage, "warm_up", None)
+            if warmer is not None:
+                await warmer()
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
@@ -250,6 +261,7 @@ class Raglan:
         filters: list[Filter] | None = None,
         options: SearchOptions | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_level: str | None = None,
     ) -> tuple[list[SearchResult], Trace]:
         """Run a single search and return ``(results, trace)``.
 
@@ -265,6 +277,9 @@ class Raglan:
             Per-request option overrides (see ``SearchOptions``).
         metadata:
             Arbitrary metadata attached to the trace.
+        trace_level:
+            Per-request trace detail override: ``"minimal"``, ``"normal"``,
+            or ``"full"``.  Defaults to the pipeline's configured level.
         """
         if not query.strip():
             raise ValueError("query must be a non-empty string")
@@ -277,7 +292,11 @@ class Raglan:
         if top_k is not None:
             opts.top_k = top_k
         return await self._get_pipeline().run(
-            query, filters=filters, options=opts, metadata=metadata
+            query,
+            filters=filters,
+            options=opts,
+            metadata=metadata,
+            trace_level=trace_level,
         )
 
     async def batch_search(
@@ -361,9 +380,12 @@ class Raglan:
     def config() -> dict[str, Any]:
         """Return a configuration template with sensible defaults.
 
-        Fill in the ``retrievers`` list (the only required key) and any
+        Fill in the ``retrievers`` list — the **only required key** — and any
         other keys you wish to override, then pass the result to
-        :meth:`from_config`.  The template is JSON/YAML-serialisable::
+        :meth:`from_config`.  Calling ``from_config(Raglan.config())`` with
+        an empty ``retrievers`` list raises ``ConfigurationError``.
+
+        The template is JSON/YAML-serialisable::
 
             cfg = Raglan.config()
             cfg["retrievers"].append({"type": "pgvector", "params": {...}})
@@ -386,9 +408,10 @@ class Raglan:
         """Construct a Raglan instance from a config-template dictionary.
 
         Accepts the same shape as :meth:`from_dict`; ``None`` values are
-        treated as "use the default".
+        treated as "use the default".  This is an alias for :meth:`from_dict`
+        — the two are interchangeable.
         """
-        return RaglanBuilder._from_dict(config).build()
+        return Raglan.from_dict(config)
 
     def export_config(self) -> dict[str, Any]:
         """Export the current configuration as a serialisable dictionary.
@@ -495,6 +518,29 @@ def _build_component_registry() -> dict[str, type]:
 
 
 _COMPONENT_REGISTRY = _build_component_registry()
+
+
+def register_component(type_name: str, cls: type) -> None:
+    """Register a custom component class for ``from_dict()``/``from_config()``.
+
+    After registration, configuration dictionaries can reference the
+    component by type name::
+
+        from raglan import register_component
+
+        register_component("my_retriever", MyRetriever)
+        rag = Raglan.from_dict(
+            {"retrievers": [{"type": "my_retriever", "params": {...}}]}
+        )
+
+    The class must be constructible from its ``params`` kwargs (and should
+    implement ``to_dict()`` to round-trip through ``export_config()``).
+    """
+    if not isinstance(type_name, str) or not type_name:
+        raise ConfigurationError("type_name must be a non-empty string")
+    if type_name in _COMPONENT_REGISTRY:
+        raise ConfigurationError(f"Component type '{type_name}' is already registered.")
+    _COMPONENT_REGISTRY[type_name] = cls
 
 
 # ============================================================================
@@ -750,12 +796,20 @@ class RaglanBuilder:
 
 
 def _serialize(component: Any) -> dict[str, Any]:
-    """Serialize a pipeline component to a ``{type, params}`` dict."""
+    """Serialize a pipeline component to a ``{type, params}`` dict.
+
+    Components must implement ``to_dict()``.  Raising instead of silently
+    emitting ``{"type": name, "params": {}}`` prevents a config that would
+    fail later in ``from_dict()`` from being produced undetected.
+    """
     if hasattr(component, "to_dict"):
         return component.to_dict()  # type: ignore[no-any-return]
-    # Fallback: use the component's name attribute as type
     type_name = getattr(component, "name", component.__class__.__name__)
-    return {"type": type_name, "params": {}}
+    raise ConfigurationError(
+        f"Component '{type_name}' does not implement to_dict() and cannot be "
+        f"serialized. Implement to_dict() returning {{'type': ..., 'params': ...}} "
+        f"to make it round-trip through export_config()/from_dict()."
+    )
 
 
 def _instantiate(cfg: dict[str, Any], _stage_hint: str = "") -> Any:

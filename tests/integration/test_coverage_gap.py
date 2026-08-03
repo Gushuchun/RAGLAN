@@ -283,7 +283,15 @@ class TestPgvectorFullMock:
         mock_asyncpg = MagicMock()
         mock_pool = MagicMock()
         mock_row = MagicMock()
-        mock_row.__getitem__ = lambda self, key: {"child_id": "c1", "parent_content": "pc"}[key]
+
+        def _getitem(self, key):
+            # Support both positional access (asyncpg Record style, row[0])
+            # and column-name access (row["child_id"]).
+            if isinstance(key, int):
+                return ["c1", "pc"][key]
+            return {"child_id": "c1", "parent_content": "pc"}[key]
+
+        mock_row.__getitem__ = _getitem
         mock_pool.fetch = AsyncMock(return_value=[mock_row])
 
         with patch.dict(sys.modules, {"asyncpg": mock_asyncpg}):

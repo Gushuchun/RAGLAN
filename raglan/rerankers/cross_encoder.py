@@ -49,6 +49,14 @@ class CrossEncoderReranker:
         self._input_builder = input_builder or self._default_input
         self._model: Any = None
 
+    async def warm_up(self) -> None:
+        """Pre-load the Cross-Encoder model so the first ``rerank()`` is fast.
+
+        Call during application startup (optionally via ``Raglan.warm_up()``)
+        to avoid the model-download/load stall on the first request.
+        """
+        await asyncio.to_thread(self._get_model)
+
     async def rerank(
         self,
         query: str,

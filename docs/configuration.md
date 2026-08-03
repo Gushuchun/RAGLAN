@@ -15,8 +15,8 @@ Pass a retriever (or list) as the first positional argument; every other
 stage is optional and uses a sensible default:
 
 ```python
-rag = Raglan([bm25])           # BM25-only, zero other config needed
-rag = Raglan([pgvector, bm25]) # hybrid — pass retrievers positionally
+rag = Raglan([bm25])  # BM25-only, zero other config needed
+rag = Raglan([pgvector, bm25])  # hybrid — pass retrievers positionally
 ```
 
 Additional stages are passed as keyword arguments. Components accept
@@ -26,11 +26,11 @@ three forms — a live object, a `"vendor:model"` string, or a
 ```python
 rag = Raglan(
     [pgvector, BM25Retriever()],
-    expander="openai:gpt-4o-mini",                 # string shorthand
+    expander="openai:gpt-4o-mini",  # string shorthand
     embedder={"type": "openai_embedder", "params": {"model": "text-embedding-3-small"}},
-    fusion="rrf",                                  # "rrf" | "weighted" | "round_robin"
+    fusion="rrf",  # "rrf" | "weighted" | "round_robin"
     reranker=None,
-    fallback_mode="degrade",                       # "degrade" | "strict"
+    fallback_mode="degrade",  # "degrade" | "strict"
 )
 ```
 
@@ -41,7 +41,7 @@ Start with an empty instance and configure piece by piece — no `build()`:
 ```python
 rag = Raglan()
 rag.add_retriever(bm25)
-rag.add_retriever(pgvector)          # or add_retrievers([...])
+rag.add_retriever(pgvector)  # or add_retrievers([...])
 rag.set_embedder("openai:text-embedding-3-small")
 rag.set_expander("openai:gpt-4o-mini")
 rag.set_fusion("rrf")
@@ -56,8 +56,10 @@ Grab a template with defaults, fill it in, and build. The template is
 JSON/YAML-serialisable, so configs can live in a shared file:
 
 ```python
-cfg = Raglan.config()   # → {"retrievers": [], "fusion": "rrf", "expander": None, ...}
-cfg["retrievers"].append({"type": "pgvector", "params": {"connection_string": "...", "table": "kb.chunks"}})
+cfg = Raglan.config()  # → {"retrievers": [], "fusion": "rrf", "expander": None, ...}
+cfg["retrievers"].append(
+    {"type": "pgvector", "params": {"connection_string": "...", "table": "kb.chunks"}}
+)
 cfg["expander"] = "openai:gpt-4o-mini"
 rag = Raglan.from_config(cfg)
 ```
@@ -166,18 +168,40 @@ Semantic search using vector embeddings.
 
 | Retriever | Backend | Key params |
 |-----------|---------|-----------|
-| `ConfigurablePgvectorRetriever` | Postgres + pgvector | `connection_string`, `table`, column mappings, `distance_metric` |
+| `ConfigurablePgvectorRetriever` | Postgres + pgvector | `connection_string`, `table`, column mappings, `distance_metric`, `session_factory` |
 | `QdrantRetriever` | Qdrant (local/cloud) | `url`, `collection_name`, `vector_name`, `distance_metric` |
 | `ChromaDBRetriever` | ChromaDB | `collection_name`, `persist_directory`, `distance_metric` |
 | `MemoryRetriever` | In-memory (testing) | `chunks` preloaded data |
 
 **Custom retriever**: Implement the `Retriever` protocol and pass to `.with_retrievers()`.
 
+`ConfigurablePgvectorRetriever` supports three connection modes — pick one:
+
+```python
+# 1. asyncpg connection string
+ConfigurablePgvectorRetriever(connection_string="postgresql://user:pass@host/db", table="kb")
+
+# 2. pre-built asyncpg pool
+ConfigurablePgvectorRetriever(connection_pool=pool, table="kb")
+
+# 3. SQLAlchemy async session factory (reuse your app's ORM session)
+ConfigurablePgvectorRetriever(session_factory=async_session_factory, table="kb")
+```
+
 ### Stage 2b: Sparse Retrieval (BM25)
 
 | Retriever | Description | Key params |
 |-----------|------------|-----------|
 | `BM25Retriever` | Pure Python Okapi BM25 | `k1=1.5`, `b=0.75`, custom `tokenizer`, `stopwords` |
+
+`BM25Retriever` delegates indexing and scoring to a pluggable `SparseIndex`.
+The default is an in-memory BM25 index; pass a custom backend to scale to an
+external engine:
+
+```python
+BM25Retriever()  # default in-memory backend
+BM25Retriever(index=MyElasticsearchIndex(...))  # custom SparseIndex backend
+```
 
 **Disable BM25**: Simply don't include it in the retrievers list.
 

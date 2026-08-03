@@ -13,6 +13,7 @@ import time as _time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from raglan.exceptions import ConfigurationError
 from raglan.types import (
     PipelineContext,
     SearchOptions,
@@ -52,15 +53,15 @@ class Pipeline:
     def iter_stages(self) -> list[Any]:
         """Return a flat list of all stages (public API for resource cleanup).
 
-        Middleware-wrapped stages are unwrapped so callers receive the
-        underlying stage object directly.
+        Middleware-wrapped stages are unwrapped — recursively, so a run of
+        consecutive middleware (``[mw1, mw2, stage]``) still yields the
+        underlying stage object.
         """
         result: list[Any] = []
         for item in self._items:
             stages = item if isinstance(item, list) else [item]
             for stage in stages:
-                # Unwrap _WrappedStage to get the underlying stage
-                result.append(stage._stage if isinstance(stage, _WrappedStage) else stage)
+                result.append(_unwrap_stage(stage))
         return result
 
     async def run(
@@ -71,6 +72,7 @@ class Pipeline:
         options: SearchOptions | None = None,
         metadata: dict[str, Any] | None = None,
         timeout: float | None = None,
+        trace_level: str | None = None,
     ) -> tuple[list[Any], Trace]:
         """Execute all stages, returning ``(final_results, trace)``.
 
@@ -80,6 +82,9 @@ class Pipeline:
             Global deadline in seconds for the entire pipeline run.
             When exceeded a ``TimeoutError`` degradation is recorded and
             whatever partial results are available are returned.
+        trace_level:
+            Per-request trace detail override: ``"minimal"``, ``"normal"``,
+            or ``"full"``.  Defaults to the pipeline's configured level.
         """
         ctx = PipelineContext(
             query=query,
@@ -89,12 +94,16 @@ class Pipeline:
             started_at=_time.monotonic(),
         )
 
+        # Per-request fallback override (SearchOptions.fallback_mode) wins;
+        # otherwise fall back to the pipeline's configured mode.
+        effective_fallback = ctx.options.fallback_mode or self._fallback_mode
+
         async def _run_all(ctx: PipelineContext) -> PipelineContext:
             for item in self._items:
                 if isinstance(item, list):
-                    ctx = await _run_parallel(item, ctx, self._fallback_mode)
+                    ctx = await _run_parallel(item, ctx, effective_fallback)
                 else:
-                    ctx = await _run_single(item, ctx, self._fallback_mode)
+                    ctx = await _run_single(item, ctx, effective_fallback)
             return ctx
 
         try:
@@ -115,7 +124,8 @@ class Pipeline:
         if top_k > 0:
             ctx.final_results = ctx.final_results[:top_k]
 
-        trace = _build_trace(ctx, self._trace_level)
+        effective_trace_level = trace_level or self._trace_level
+        trace = _build_trace(ctx, effective_trace_level)
 
         # Emit metrics
         if self._metrics is not None:
@@ -202,6 +212,12 @@ _StageHandler = Callable[[Any, PipelineContext], Awaitable[PipelineContext]]
 
 async def _handle_expander(stage: Any, ctx: PipelineContext) -> PipelineContext:
     queries, entities = await stage.expand(ctx.query)
+    # Protocol contract: the first element MUST be the original query so that
+    # RRFFusion.original_query_idx weights it correctly. Auto-prepend if a
+    # custom expander violates this, rather than silently corrupting fusion.
+    if not queries or queries[0] != ctx.query:
+        queries = [q for q in queries if q != ctx.query]
+        queries.insert(0, ctx.query)
     ctx.expanded_queries = queries
     ctx.entities = entities
     return ctx
@@ -215,7 +231,9 @@ async def _handle_embedder(stage: Any, ctx: PipelineContext) -> PipelineContext:
 
 async def _handle_retriever(stage: Any, ctx: PipelineContext) -> PipelineContext:
     name = _stage_name(stage)
-    is_sparse = "bm25" in name.lower()
+    # A sparse retriever does not require embeddings (e.g. BM25). Prefer the
+    # protocol flag over name-matching so custom sparse retrievers work too.
+    is_sparse = not bool(getattr(stage, "requires_embeddings", True))
     top_k = (
         _opt(ctx.options.bm25_top_k, _opt(ctx.options.dense_top_k, 20))
         if is_sparse
@@ -325,8 +343,21 @@ class _WrappedStage:
         return await self._mw.wrap(ctx, _next)  # type: ignore[no-any-return]
 
 
+def _unwrap_stage(stage: Any) -> Any:
+    """Recursively unwrap ``_WrappedStage`` layers to the underlying stage."""
+    while isinstance(stage, _WrappedStage):
+        stage = stage._stage
+    return stage
+
+
 def _preprocess(items: list[Any]) -> list[Any]:
-    """Flatten middleware+stage pairs into ``_WrappedStage`` objects."""
+    """Flatten middleware+stage pairs into ``_WrappedStage`` objects.
+
+    Supports a run of consecutive middleware wrapping a single stage —
+    ``[mw1, mw2, stage]`` becomes ``_WrappedStage(mw1, _WrappedStage(mw2, stage))``
+    so each middleware sees the next as its inner ``next`` callable.
+    A middleware with nothing to wrap is a configuration error.
+    """
     result: list[Any] = []
     i = 0
     while i < len(items):
@@ -334,9 +365,25 @@ def _preprocess(items: list[Any]) -> list[Any]:
         if isinstance(cur, list):
             result.append(cur)
             i += 1
-        elif _is_middleware(cur) and i + 1 < len(items):
-            result.append(_WrappedStage(cur, items[i + 1]))
-            i += 2
+        elif _is_middleware(cur):
+            # Collect the consecutive run of middleware.
+            mws: list[Any] = [cur]
+            j = i + 1
+            while j < len(items) and _is_middleware(items[j]):
+                mws.append(items[j])
+                j += 1
+            if j >= len(items):
+                raise ConfigurationError(
+                    f"Middleware {mws[-1].__class__.__name__} has no stage to wrap — "
+                    "every middleware must be followed by a stage."
+                )
+            # Wrap from the innermost outward: the last middleware wraps the
+            # stage, the previous middleware wraps that, and so on.
+            wrapped: Any = items[j]
+            for mw in reversed(mws):
+                wrapped = _WrappedStage(mw, wrapped)
+            result.append(wrapped)
+            i = j + 1
         else:
             result.append(cur)
             i += 1
@@ -399,6 +446,18 @@ def _build_trace(ctx: PipelineContext, trace_level: str = "normal") -> Trace:
     query = ctx.query if trace_level != "minimal" else ""
     metadata = ctx.metadata if trace_level != "minimal" else {}
     degradations = ctx.degradations if trace_level != "minimal" else []
+    expanded_queries = ctx.expanded_queries if trace_level != "minimal" else []
+    entities = ctx.entities if trace_level != "minimal" else {}
+
+    # Per-retriever hit counts (useful for diagnosing coverage).
+    retriever_hits = (
+        {
+            name: sum(len(per_query) for per_query in query_results)
+            for name, query_results in ctx.retriever_results.items()
+        }
+        if trace_level != "minimal"
+        else {}
+    )
 
     return Trace(
         query=query,
@@ -406,4 +465,7 @@ def _build_trace(ctx: PipelineContext, trace_level: str = "normal") -> Trace:
         stage_timings=ctx.stage_timings,
         degradations=degradations,
         metadata=metadata,
+        expanded_queries=expanded_queries,
+        entities=entities,
+        retriever_hits=retriever_hits,
     )

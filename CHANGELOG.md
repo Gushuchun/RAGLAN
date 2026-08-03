@@ -5,6 +5,30 @@ All notable changes to Raglan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-03
+
+### Fixed
+
+- `RRFFusion` and `BM25Retriever` now preserve chunk metadata end-to-end.
+- Consecutive middleware on one stage now work correctly (and cleanup reaches
+  the wrapped stage); an orphan middleware raises a clear error.
+- SQLAlchemy-backed pgvector retrieval binds query parameters correctly.
+
+### Added
+
+- Pluggable sparse index: `BM25Retriever(index=...)` accepts an external
+  backend (Elasticsearch, meilisearch, ...).
+- `register_component()` for config-driven construction of custom stages.
+- `ConfigurablePgvectorRetriever(session_factory=...)` for SQLAlchemy apps.
+- `warm_up()` lifecycle for pre-loading models at startup.
+- `Trace` now exposes intermediate results (`expanded_queries`, `entities`,
+  per-retriever hit counts); `search(trace_level=...)` overrides per request.
+
+### Performance
+
+- BM25 concurrent searches no longer serialise on the writer lock; average
+  document length no longer drifts under incremental add/remove.
+
 ## [0.2.0] — 2026-07-31
 
 ### Added
@@ -159,5 +183,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All integrations are optional extras: `[openai]`, `[pgvector]`, `[chromadb]`, `[qdrant]`, `[cohere]`, `[huggingface]`, `[dashscope]`, `[litellm]`, `[tiktoken]`, `[all]`.
 - Consistent lazy-import with user-friendly error messages via `_lazy._import_module()`.
 
+[0.2.1]: https://github.com/Gushuchun/RAGLAN/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Gushuchun/RAGLAN/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Gushuchun/RAGLAN/releases/tag/v0.1.0
