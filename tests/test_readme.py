@@ -30,13 +30,32 @@ class TestReadmeQuickstart:
             ]
 
         await bm25.index(chunks())
-        rag = Raglan.builder().with_retrievers([bm25]).build()
+        rag = Raglan([bm25])
         results, _trace = await rag.search("how to return my order")
 
         assert len(results) >= 1
         assert results[0].score > 0
         # "return policy" should be the top result
         assert any("return" in r.content.lower() for r in results)
+
+    @pytest.mark.asyncio
+    async def test_incremental_configuration(self):
+        """Incremental setters + string shorthand from README."""
+        from raglan import Raglan
+        from raglan.retrievers import BM25Retriever
+
+        bm25 = BM25Retriever()
+
+        async def chunks():
+            yield [("doc1", "Return policy: 30 days.", None)]
+
+        await bm25.index(chunks())
+
+        rag = Raglan()
+        rag.add_retriever(bm25)
+        rag.set_fusion("rrf")
+        results, _trace = await rag.search("return")
+        assert len(results) >= 1
 
     @pytest.mark.asyncio
     async def test_builder_api(self):

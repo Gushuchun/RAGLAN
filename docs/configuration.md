@@ -4,7 +4,65 @@ Raglan configuration has three layers: **Builder API** (assemble your pipeline),
 
 ---
 
-## 1. Builder API
+## 1. Construction API
+
+Raglan offers several construction styles. All produce the same
+six-stage pipeline; pick whichever fits your workflow.
+
+### 1a. Direct instantiation (recommended)
+
+Pass a retriever (or list) as the first positional argument; every other
+stage is optional and uses a sensible default:
+
+```python
+rag = Raglan([bm25])           # BM25-only, zero other config needed
+rag = Raglan([pgvector, bm25]) # hybrid — pass retrievers positionally
+```
+
+Additional stages are passed as keyword arguments. Components accept
+three forms — a live object, a `"vendor:model"` string, or a
+`{"type": ..., "params": ...}` dict:
+
+```python
+rag = Raglan(
+    [pgvector, BM25Retriever()],
+    expander="openai:gpt-4o-mini",                 # string shorthand
+    embedder={"type": "openai_embedder", "params": {"model": "text-embedding-3-small"}},
+    fusion="rrf",                                  # "rrf" | "weighted" | "round_robin"
+    reranker=None,
+    fallback_mode="degrade",                       # "degrade" | "strict"
+)
+```
+
+### 1b. Incremental configuration
+
+Start with an empty instance and configure piece by piece — no `build()`:
+
+```python
+rag = Raglan()
+rag.add_retriever(bm25)
+rag.add_retriever(pgvector)          # or add_retrievers([...])
+rag.set_embedder("openai:text-embedding-3-small")
+rag.set_expander("openai:gpt-4o-mini")
+rag.set_fusion("rrf")
+rag.set_fallback_mode("degrade")
+# every setter returns self — chainable:
+rag = Raglan().add_retriever(bm25).set_fusion("rrf")
+```
+
+### 1c. Configuration template
+
+Grab a template with defaults, fill it in, and build. The template is
+JSON/YAML-serialisable, so configs can live in a shared file:
+
+```python
+cfg = Raglan.config()   # → {"retrievers": [], "fusion": "rrf", "expander": None, ...}
+cfg["retrievers"].append({"type": "pgvector", "params": {"connection_string": "...", "table": "kb.chunks"}})
+cfg["expander"] = "openai:gpt-4o-mini"
+rag = Raglan.from_config(cfg)
+```
+
+### 1d. Builder API (explicit, typed)
 
 All configuration goes through the `RaglanBuilder`:
 

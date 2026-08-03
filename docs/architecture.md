@@ -58,10 +58,16 @@ Any of the pipeline stages can be:
 - **Extended**: Wrap with middleware (timeout, retry, circuit breaker)
 
 ```python
-# Minimal: BM25 only
-rag = Raglan.builder().with_retrievers([BM25Retriever()]).build()
+# Minimal: BM25 only — direct instantiation
+rag = Raglan([BM25Retriever()])
+
+# Incremental — configure piece by piece, no build()
+rag = Raglan()
+rag.add_retriever(BM25Retriever())
+rag.set_embedder("openai:text-embedding-3-small")
 
 # Full: Query expansion + embedding + dual retrieval + RRF + reranking
+# (Builder style for explicit, typed configuration)
 rag = (
     Raglan.builder()
     .with_expander(OpenAIExpander(model="gpt-4o-mini"))

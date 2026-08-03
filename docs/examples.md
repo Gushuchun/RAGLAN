@@ -1,5 +1,44 @@
 # Multi-Scenario Examples
 
+## Example 0: Quick Start (Direct Instantiation)
+
+The simplest entry points — a retriever as the first positional argument,
+everything else optional:
+
+```python
+import asyncio
+from raglan import Raglan
+from raglan.retrievers import BM25Retriever
+
+
+async def main():
+    bm25 = BM25Retriever()
+
+    async def chunks():
+        yield [("doc1", "Return policy: 30 days.", None)]
+
+    await bm25.index(chunks())
+
+    # Direct instantiation — BM25-only, zero extra config.
+    rag = Raglan([bm25])
+    results, trace = await rag.search("how to return")
+
+    # Incremental configuration — add stages step by step.
+    rag2 = Raglan()
+    rag2.add_retriever(bm25)
+    rag2.set_embedder("openai:text-embedding-3-small")  # string shorthand
+    rag2.set_expander("openai:gpt-4o-mini")
+    rag2.set_fusion("rrf")
+
+    # Config template — fill in a defaults dict.
+    cfg = Raglan.config()
+    cfg["retrievers"].append({"type": "bm25"})
+    rag3 = Raglan.from_config(cfg)
+
+
+asyncio.run(main())
+```
+
 ## Example 1: pgvector + OpenAI Embeddings
 
 ```python

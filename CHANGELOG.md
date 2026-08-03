@@ -5,6 +5,32 @@ All notable changes to Raglan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-07-31
+
+### Added
+
+- **Direct instantiation**: `Raglan([bm25])` — pass a retriever (or list) as the
+  first positional argument; all other stages optional with defaults.
+- **Incremental configuration**: `Raglan()` empty instance + `add_retriever()`,
+  `set_embedder()`, `set_expander()`, `set_fusion()`, `set_reranker()`,
+  `set_context_builder()`, `set_fallback_mode()`, `set_trace_level()` — all
+  return `self` for chaining; the pipeline is assembled lazily on first search.
+- **Configuration templates**: `Raglan.config()` returns a defaults-filled dict
+  (JSON/YAML-serialisable); `Raglan.from_config()` builds from it.
+- **Flexible component forms**: every stage accepts a live object, a
+  `"vendor:model"` string shorthand (`"openai:text-embedding-3-small"`,
+  `"rrf"`), or a `{"type": ..., "params": ...}` dict — in constructors,
+  setters, and `from_dict()` alike.
+
+### Changed
+
+- `Raglan.__init__` accepts retrievers positionally while remaining backward
+  compatible with the legacy `Raglan(pipeline, config)` constructor.
+- `RaglanBuilder.add_retriever()` appends to the retriever list (the existing
+  `with_retrievers()` still replaces).
+- `Raglan.export_config()` now serialises the current builder state for
+  unbuilt incremental instances.
+
 ## [0.1.0] — 2026-07-29
 
 ### Added
@@ -133,4 +159,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All integrations are optional extras: `[openai]`, `[pgvector]`, `[chromadb]`, `[qdrant]`, `[cohere]`, `[huggingface]`, `[dashscope]`, `[litellm]`, `[tiktoken]`, `[all]`.
 - Consistent lazy-import with user-friendly error messages via `_lazy._import_module()`.
 
+[0.2.0]: https://github.com/Gushuchun/RAGLAN/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Gushuchun/RAGLAN/releases/tag/v0.1.0

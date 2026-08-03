@@ -48,6 +48,26 @@ from raglan.types import (
 class Raglan:
     """The main Raglan entry point — a configured retrieval pipeline.
 
+    Three ways to construct:
+
+    1. **Direct instantiation** (recommended) — pass a retriever or list as
+       the first positional argument, then configure incrementally::
+
+           rag = Raglan([bm25])
+           rag.set_embedder("openai:text-embedding-3-small")
+           rag.set_expander("openai:gpt-4o-mini")
+           results, trace = await rag.search("my query")
+
+    2. **Empty instance + incremental setters** — build up piece by piece::
+
+           rag = Raglan()
+           rag.add_retriever(bm25)
+           rag.set_fusion("rrf")
+
+    3. **Builder** — explicit, typed configuration for production::
+
+           rag = Raglan.builder().with_retrievers([bm25]).build()
+
     Supports ``async with`` for automatic resource cleanup::
 
         async with Raglan.builder().with_retrievers([...]).build() as rag:
@@ -56,11 +76,140 @@ class Raglan:
 
     def __init__(
         self,
-        pipeline: Pipeline,
+        retrievers: Retriever | list[Retriever] | Pipeline | None = None,
+        *,
+        expander: Any = None,
+        embedder: Any = None,
+        fusion: Any = None,
+        reranker: Any = None,
+        context_builder: Any = None,
+        fallback_mode: str = "degrade",
+        trace_level: str = "normal",
+        metrics_collector: Any = None,
         config: dict[str, Any] | None = None,
     ) -> None:
-        self._pipeline = pipeline
+        self._pipeline: Pipeline | None
+        self._config: dict[str, Any]
+        self._builder: RaglanBuilder | None
+
+        if isinstance(retrievers, Pipeline):
+            # Legacy path: Raglan(pipeline, config=...) — a pre-built pipeline.
+            self._pipeline = retrievers
+            self._config = config or {}
+            self._builder = None
+            return
+
+        # Configurable path: hold an internal Builder, assemble lazily.
+        self._builder = RaglanBuilder()
+        self._pipeline = None
         self._config = config or {}
+
+        if retrievers is not None:
+            if isinstance(retrievers, list):
+                for r in retrievers:
+                    self._builder.add_retriever(r)
+            else:
+                self._builder.add_retriever(retrievers)
+
+        if expander is not None:
+            self.set_expander(expander)
+        if embedder is not None:
+            self.set_embedder(embedder)
+        if fusion is not None:
+            self.set_fusion(fusion)
+        if reranker is not None:
+            self.set_reranker(reranker)
+        if context_builder is not None:
+            self.set_context_builder(context_builder)
+        self.set_fallback_mode(fallback_mode)
+        self.set_trace_level(trace_level)
+        if metrics_collector is not None:
+            self._builder.with_metrics_collector(metrics_collector)
+
+    # ------------------------------------------------------------------
+    # Incremental configuration
+    # ------------------------------------------------------------------
+
+    def _ensure_mutable(self) -> None:
+        """Raise if the pipeline has already been built (immutable after search)."""
+        if self._pipeline is not None:
+            raise ConfigurationError(
+                "Raglan pipeline already built — configure it before the first search."
+            )
+
+    def add_retriever(self, retriever: Retriever) -> Raglan:
+        """Add a retriever. Returns ``self`` for chaining."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        self._builder.add_retriever(retriever)
+        return self
+
+    def add_retrievers(self, retrievers: list[Retriever]) -> Raglan:
+        """Add multiple retrievers. Returns ``self`` for chaining."""
+        for r in retrievers:
+            self.add_retriever(r)
+        return self
+
+    def set_expander(self, expander: Any) -> Raglan:
+        """Set the query expander (object, ``"vendor:model"`` string, or dict)."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        self._builder.with_expander(_coerce_component(expander, "expander"))
+        return self
+
+    def set_embedder(self, embedder: Any) -> Raglan:
+        """Set the embedder (object, ``"vendor:model"`` string, or dict)."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        self._builder.with_embedder(_coerce_component(embedder, "embedder"))
+        return self
+
+    def set_fusion(self, fusion: Any) -> Raglan:
+        """Set the fusion strategy (object, ``"rrf"``/``"weighted"``, or dict)."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        self._builder.with_fusion(_coerce_component(fusion, "fusion"))
+        return self
+
+    def set_reranker(self, reranker: Any) -> Raglan:
+        """Set the reranker (object, string, or dict). ``None`` disables reranking."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        if reranker is not None:
+            self._builder.with_reranker(_coerce_component(reranker, "reranker"))
+        return self
+
+    def set_context_builder(self, cb: Any) -> Raglan:
+        """Set the context builder (object, string, or dict)."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        self._builder.with_context_builder(_coerce_component(cb, "context_builder"))
+        return self
+
+    def set_fallback_mode(self, mode: str) -> Raglan:
+        """Set fallback behaviour: ``"degrade"`` or ``"strict"``."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        self._builder.with_fallback_mode(mode)
+        return self
+
+    def set_trace_level(self, level: str) -> Raglan:
+        """Set trace detail: ``"minimal"``, ``"normal"``, or ``"full"``."""
+        self._ensure_mutable()
+        assert self._builder is not None
+        self._builder.with_trace_level(level)
+        return self
+
+    # ------------------------------------------------------------------
+
+    def _get_pipeline(self) -> Pipeline:
+        """Lazily build and return the underlying pipeline."""
+        if self._pipeline is None:
+            assert self._builder is not None
+            rag = self._builder.build()
+            self._pipeline = rag._pipeline
+            self._config = rag._config
+        return self._pipeline  # type: ignore[return-value]
 
     async def __aenter__(self) -> Raglan:
         return self
@@ -81,6 +230,8 @@ class Raglan:
         pools, Qdrant clients, etc.).  Each stage is closed independently
         — a failure in one does not prevent other stages from being closed.
         """
+        if self._pipeline is None:
+            return
         for stage in self._pipeline.iter_stages():
             closer = getattr(stage, "close", None)
             if closer is not None:
@@ -125,7 +276,9 @@ class Raglan:
         opts = options or SearchOptions()
         if top_k is not None:
             opts.top_k = top_k
-        return await self._pipeline.run(query, filters=filters, options=opts, metadata=metadata)
+        return await self._get_pipeline().run(
+            query, filters=filters, options=opts, metadata=metadata
+        )
 
     async def batch_search(
         self,
@@ -204,6 +357,39 @@ class Raglan:
         """
         return RaglanBuilder._from_dict(config).build()
 
+    @staticmethod
+    def config() -> dict[str, Any]:
+        """Return a configuration template with sensible defaults.
+
+        Fill in the ``retrievers`` list (the only required key) and any
+        other keys you wish to override, then pass the result to
+        :meth:`from_config`.  The template is JSON/YAML-serialisable::
+
+            cfg = Raglan.config()
+            cfg["retrievers"].append({"type": "pgvector", "params": {...}})
+            cfg["expander"] = "openai:gpt-4o-mini"
+            rag = Raglan.from_config(cfg)
+        """
+        return {
+            "retrievers": [],
+            "expander": None,
+            "embedder": None,
+            "fusion": "rrf",
+            "reranker": None,
+            "context_builder": None,
+            "fallback_mode": "degrade",
+            "trace_level": "normal",
+        }
+
+    @staticmethod
+    def from_config(config: dict[str, Any]) -> Raglan:
+        """Construct a Raglan instance from a config-template dictionary.
+
+        Accepts the same shape as :meth:`from_dict`; ``None`` values are
+        treated as "use the default".
+        """
+        return RaglanBuilder._from_dict(config).build()
+
     def export_config(self) -> dict[str, Any]:
         """Export the current configuration as a serialisable dictionary.
 
@@ -213,6 +399,9 @@ class Raglan:
         Note that custom callables and externally-managed objects (e.g.
         database connections) are represented as markers.
         """
+        if self._pipeline is None and self._builder is not None:
+            # Incremental instance not yet built — serialise the builder state.
+            return self._builder._to_config_dict()
         return dict(self._config)
 
     def to_dict(self) -> dict[str, Any]:
@@ -345,8 +534,16 @@ class RaglanBuilder:
         return self
 
     def with_retrievers(self, retrievers: list[Retriever]) -> RaglanBuilder:
-        """Attach one or more retrievers (Stage 2). At least one is required."""
+        """Attach one or more retrievers (Stage 2). At least one is required.
+
+        Replaces any previously configured retrievers.
+        """
         self._retrievers = retrievers
+        return self
+
+    def add_retriever(self, retriever: Retriever) -> RaglanBuilder:
+        """Append a single retriever to the current list. Returns ``self``."""
+        self._retrievers.append(retriever)
         return self
 
     def with_fusion(self, fusion: Fusion) -> RaglanBuilder:
@@ -479,33 +676,33 @@ class RaglanBuilder:
         # Expander
         expander_cfg = config.get("expander")
         if expander_cfg:
-            builder.with_expander(_instantiate(expander_cfg, "expander"))
+            builder.with_expander(_coerce_component(expander_cfg, "expander"))
 
         # Embedder
         embedder_cfg = config.get("embedder")
         if embedder_cfg:
-            builder.with_embedder(_instantiate(embedder_cfg, "embedder"))
+            builder.with_embedder(_coerce_component(embedder_cfg, "embedder"))
 
         # Retrievers
         retriever_cfgs = config.get("retrievers", [])
         if retriever_cfgs:
-            retrievers = [_instantiate(c, "retriever") for c in retriever_cfgs]
+            retrievers = [_coerce_component(c, "retriever") for c in retriever_cfgs]
             builder.with_retrievers(retrievers)
 
         # Fusion
         fusion_cfg = config.get("fusion")
         if fusion_cfg:
-            builder.with_fusion(_instantiate(fusion_cfg, "fusion"))
+            builder.with_fusion(_coerce_component(fusion_cfg, "fusion"))
 
         # Reranker
         reranker_cfg = config.get("reranker")
         if reranker_cfg:
-            builder.with_reranker(_instantiate(reranker_cfg, "reranker"))
+            builder.with_reranker(_coerce_component(reranker_cfg, "reranker"))
 
         # Context builder
         ctx_cfg = config.get("context_builder")
         if ctx_cfg:
-            builder.with_context_builder(_instantiate(ctx_cfg, "context_builder"))
+            builder.with_context_builder(_coerce_component(ctx_cfg, "context_builder"))
 
         return builder
 
@@ -581,6 +778,92 @@ def _instantiate(cfg: dict[str, Any], _stage_hint: str = "") -> Any:
         raise ConfigurationError(
             f"Failed to instantiate '{type_name}' with params {params}: {exc}"
         ) from exc
+
+
+# ============================================================================
+# Component coercion — objects / strings / dicts → component instances
+# ============================================================================
+
+# vendor → {stage: (component_class, model_kwarg)}
+_STRING_VENDORS: dict[str, dict[str, tuple[type, str]]] = {}
+
+
+def _build_string_vendors() -> dict[str, dict[str, tuple[type, str]]]:
+    """Build the vendor→stage shorthand table (lazy imports, optional deps guarded)."""
+    from raglan.embedders.huggingface import HuggingFaceEmbedder
+    from raglan.embedders.openai import OpenAIEmbedder
+    from raglan.expanders.openai import OpenAIExpander
+
+    vendors: dict[str, dict[str, tuple[type, str]]] = {
+        "openai": {
+            "embedder": (OpenAIEmbedder, "model"),
+            "expander": (OpenAIExpander, "model"),
+        },
+        "huggingface": {"embedder": (HuggingFaceEmbedder, "model_name")},
+    }
+
+    try:
+        from raglan.embedders.dashscope import DashScopeEmbedder
+
+        vendors["dashscope"] = {"embedder": (DashScopeEmbedder, "model")}
+    except ImportError:
+        pass
+
+    try:
+        from raglan.expanders.litellm import LiteLLMExpander
+
+        vendors["litellm"] = {"expander": (LiteLLMExpander, "model")}
+    except ImportError:
+        pass
+
+    return vendors
+
+
+def _string_to_component(s: str, hint: str) -> Any:
+    """Resolve a string shorthand to a component instance.
+
+    Two forms are supported:
+
+    1. A bare registry type name — ``"bm25"``, ``"rrf"``, ``"passthrough"``.
+    2. ``"vendor:model"`` — ``"openai:text-embedding-3-small"`` (embedder),
+       ``"openai:gpt-4o-mini"`` (expander), ``"huggingface:BAAI/..."``.
+    """
+    global _STRING_VENDORS
+    if not _STRING_VENDORS:
+        _STRING_VENDORS = _build_string_vendors()
+
+    # 1) Bare registry type name, e.g. "bm25", "rrf", "passthrough".
+    if s in _COMPONENT_REGISTRY:
+        return _COMPONENT_REGISTRY[s]()
+
+    # 2) vendor:model shorthand.
+    if ":" in s:
+        vendor, model = s.split(":", 1)
+        table = _STRING_VENDORS.get(vendor)
+        if table is not None and hint in table:
+            cls, param = table[hint]
+            return cls(**{param: model})
+
+    raise ConfigurationError(
+        f"Cannot interpret '{s}' as {hint}. Pass a component object, "
+        f"a {{'type': ...}} dict, or 'vendor:model'."
+    )
+
+
+def _coerce_component(value: Any, hint: str) -> Any:
+    """Normalise a component spec into a live instance.
+
+    Accepts an already-instantiated object, a ``"vendor:model"`` / registry
+    type-name string, or a ``{"type": ..., "params": ...}`` dict.  ``None``
+    passes through unchanged (meaning "use the default").
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return _instantiate(value, hint)
+    if isinstance(value, str):
+        return _string_to_component(value, hint)
+    return value
 
 
 def _is_identity_expander(obj: Any) -> bool:

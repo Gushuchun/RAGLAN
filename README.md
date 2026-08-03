@@ -102,7 +102,7 @@ async def main():
     await bm25.index(chunks())
 
     # Step 2: Build the pipeline (all stages optional beyond retrievers)
-    rag = Raglan.builder().with_retrievers([bm25]).build()
+    rag = Raglan([bm25])
 
     # Step 3: Search
     results, trace = await rag.search("how to return my order")
@@ -114,6 +114,56 @@ async def main():
 
 
 asyncio.run(main())
+```
+
+### Incremental configuration
+
+Prefer building up a pipeline piece by piece? Start with an empty
+instance and add stages incrementally — no `build()` needed:
+
+```python
+from raglan import Raglan
+from raglan.retrievers import BM25Retriever
+
+rag = Raglan()  # empty, configurable
+rag.add_retriever(bm25)  # add a retriever
+rag.set_embedder("openai:text-embedding-3-small")  # string shorthand
+rag.set_expander("openai:gpt-4o-mini")  # vendor:model form
+rag.set_fusion("rrf")
+# every setter returns self — chainable:
+#   Raglan().add_retriever(bm25).set_fusion("rrf")
+
+results, trace = await rag.search("my query")
+```
+
+Components accept three forms: a live object (`BM25Retriever()`), a
+`"vendor:model"` string (`"openai:text-embedding-3-small"`, `"rrf"`), or a
+`{"type": ..., "params": ...}` dict — the same format used by `from_dict()`.
+
+### Configuration templates
+
+For team-shared or file-based configuration, grab a template and fill it in:
+
+```python
+cfg = Raglan.config()  # → {"retrievers": [], "fusion": "rrf", "expander": None, ...}
+cfg["retrievers"].append(
+    {"type": "pgvector", "params": {"connection_string": "...", "table": "kb.chunks"}}
+)
+cfg["expander"] = "openai:gpt-4o-mini"
+
+rag = Raglan.from_config(cfg)
+```
+
+The template is JSON/YAML-serialisable, so configs can live in a file:
+
+```yaml
+# raglan.yaml
+retrievers:
+  - type: pgvector
+    params: {connection_string: "postgresql://...", table: kb.chunks}
+  - type: bm25
+fusion: rrf
+expander: "openai:gpt-4o-mini"
 ```
 
 ### Adding vector search and reranking
