@@ -289,15 +289,40 @@ class BM25Retriever:
         return counts
 
     @staticmethod
-    def _builtin_tokenizer(text: str) -> list[str]:
-        """Whitespace-split for English, bigram for CJK characters."""
+    def _is_cjk(c: str) -> bool:
+        """Check if a character is in the CJK Unified Ideographs block."""
+        return "一" <= c <= "鿿"
+
+    @staticmethod
+    def _is_cjk_extended(c: str) -> bool:
+        """Check if a character is in CJK Extended-A or compatible ranges."""
+        return "㐀" <= c <= "䶿" or "豈" <= c <= "﫿"
+
+    @classmethod
+    def _tokenize_cjk(cls, segment: str) -> list[str]:
+        """Tokenize a CJK segment using jieba if available, else bigram."""
+        try:
+            import jieba
+
+            return list(jieba.cut(segment))
+        except ImportError:
+            tokens: list[str] = []
+            for i in range(len(segment) - 1):
+                tokens.append(segment[i : i + 2])
+            tokens.append(segment)
+            return tokens
+
+    @classmethod
+    def _builtin_tokenizer(cls, text: str) -> list[str]:
+        """Auto-detect: split-based for English, jieba/bigram for CJK.
+
+        Mixed text is split by whitespace first, then each segment is
+        classified as CJK or Latin and tokenized accordingly.
+        """
         tokens: list[str] = []
         for word in text.lower().split():
-            if any("一" <= c <= "鿿" for c in word):
-                # CJK Unified Ideographs: bigram + whole word
-                for i in range(len(word) - 1):
-                    tokens.append(word[i : i + 2])
-                tokens.append(word)
+            if any(cls._is_cjk(c) or cls._is_cjk_extended(c) for c in word):
+                tokens.extend(cls._tokenize_cjk(word))
             else:
                 tokens.append(word)
         return tokens

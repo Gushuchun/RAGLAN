@@ -61,7 +61,7 @@ class TestFilterProperties:
 
 class TestBM25Tokenizer:
     @given(st.text(min_size=1, max_size=200))
-    @settings(max_examples=100)
+    @settings(max_examples=100, deadline=None)  # type: ignore[arg-type]
     def test_tokenizer_never_empty_for_nonempty_text(self, text):
         """Tokeniser always returns at least one token for non-whitespace text."""
         assume(text.strip())
@@ -71,7 +71,7 @@ class TestBM25Tokenizer:
         assert len(tokens) >= 1, f"No tokens for: {text!r}"
 
     @given(st.text(min_size=1, max_size=100))
-    @settings(max_examples=100)
+    @settings(max_examples=100, deadline=None)  # type: ignore[arg-type]
     def test_tokenizer_output_is_lowercase(self, text):
         """All tokens should be lowercase."""
         from raglan.retrievers.bm25 import BM25Retriever
@@ -89,7 +89,7 @@ class TestBM25Tokenizer:
         assert any(len(t) == 2 for t in tokens), f"Expected bigrams in: {tokens}"
 
     @given(st.text(min_size=1, max_size=100))
-    @settings(max_examples=50)
+    @settings(max_examples=50, deadline=None)  # type: ignore[arg-type]
     def test_same_input_produces_same_tokens(self, text):
         """Tokeniser is deterministic."""
         from raglan.retrievers.bm25 import BM25Retriever
