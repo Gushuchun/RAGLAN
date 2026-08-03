@@ -77,11 +77,13 @@ class BM25Retriever:
         top_k: int,
         filters: list[Filter] | None = None,
         timeout: float | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[list[ScoredChunk]]:
         """Search for *top_k* chunks per query.
 
-        *embeddings*, *filters*, and *timeout* are accepted for protocol
-        compatibility.  *filters* is not supported by the default backend.
+        *embeddings*, *filters*, *timeout*, and *request* are accepted for
+        protocol compatibility.  *filters* is not supported by the default
+        backend.
         """
         if filters:
             logging.getLogger(__name__).warning(

@@ -261,6 +261,7 @@ class Raglan:
         filters: list[Filter] | None = None,
         options: SearchOptions | None = None,
         metadata: dict[str, Any] | None = None,
+        request: dict[str, Any] | None = None,
         trace_level: str | None = None,
     ) -> tuple[list[SearchResult], Trace]:
         """Run a single search and return ``(results, trace)``.
@@ -277,6 +278,9 @@ class Raglan:
             Per-request option overrides (see ``SearchOptions``).
         metadata:
             Arbitrary metadata attached to the trace.
+        request:
+            Request-scoped context (identity, tenant, permissions, ...) —
+            forwarded to retrievers (e.g. for ACL scoping).
         trace_level:
             Per-request trace detail override: ``"minimal"``, ``"normal"``,
             or ``"full"``.  Defaults to the pipeline's configured level.
@@ -296,6 +300,7 @@ class Raglan:
             filters=filters,
             options=opts,
             metadata=metadata,
+            request=request,
             trace_level=trace_level,
         )
 
@@ -307,6 +312,7 @@ class Raglan:
         filters: list[Filter] | None = None,
         options: SearchOptions | None = None,
         metadata: dict[str, Any] | None = None,
+        request: dict[str, Any] | None = None,
         max_concurrency: int = 10,
     ) -> list[tuple[list[SearchResult], Trace]]:
         """Run multiple searches with bounded concurrency.
@@ -331,7 +337,12 @@ class Raglan:
         async def _bounded(q: str) -> tuple[list[SearchResult], Trace]:
             async with semaphore:
                 return await self.search(
-                    q, top_k=top_k, filters=filters, options=options, metadata=metadata
+                    q,
+                    top_k=top_k,
+                    filters=filters,
+                    options=options,
+                    metadata=metadata,
+                    request=request,
                 )
 
         return await asyncio.gather(*(_bounded(q) for q in queries))
@@ -344,10 +355,18 @@ class Raglan:
         filters: list[Filter] | None = None,
         options: SearchOptions | None = None,
         metadata: dict[str, Any] | None = None,
+        request: dict[str, Any] | None = None,
     ) -> tuple[list[SearchResult], Trace]:
         """Synchronous wrapper for environments without an event loop."""
         return asyncio.run(
-            self.search(query, top_k=top_k, filters=filters, options=options, metadata=metadata)
+            self.search(
+                query,
+                top_k=top_k,
+                filters=filters,
+                options=options,
+                metadata=metadata,
+                request=request,
+            )
         )
 
     # ------------------------------------------------------------------

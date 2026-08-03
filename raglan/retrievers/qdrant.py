@@ -95,6 +95,7 @@ class QdrantRetriever:
         top_k: int,
         filters: list[Filter] | None = None,
         timeout: float | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[list[ScoredChunk]]:
         first_emb = embeddings[0] if embeddings else []
         await self._ensure_collection(vector_dim=len(first_emb))

@@ -79,6 +79,7 @@ class ChromaDBRetriever:
         top_k: int,
         filters: list[Filter] | None = None,
         timeout: float | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[list[ScoredChunk]]:
         col = self._get_collection()
         results: list[list[ScoredChunk]] = []

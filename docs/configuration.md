@@ -146,9 +146,18 @@ Expands user query into multiple semantically equivalent variants.
 
 | Expander | Provider | Key params |
 |----------|----------|-----------|
-| `OpenAIExpander` | OpenAI / compatible API | `model`, `temperature`, `prompt_template`, `base_url`, `api_key` |
+| `OpenAIExpander` | OpenAI / compatible API | `model`, `temperature`, `prompt_template`, `base_url`, `api_key`, `client_factory` |
 | `LiteLLMExpander` | 100+ LLM providers | `model`, `temperature`, `prompt_template`, `api_key`, `api_base` |
 | `IdentityExpander` | No-op (default) | Returns original query unchanged |
+
+`OpenAIEmbedder` / `OpenAIExpander` accept a `client_factory` callable to
+route through a gateway or custom proxy instead of the default `AsyncOpenAI`
+construction:
+
+```python
+OpenAIEmbedder(model="text-embedding-3-small", client_factory=my_gateway_embed_client)
+OpenAIExpander(model="gpt-4o-mini", client_factory=my_gateway_chat_client)
+```
 
 **Custom prompt template:**
 
@@ -186,6 +195,20 @@ ConfigurablePgvectorRetriever(connection_pool=pool, table="kb")
 
 # 3. SQLAlchemy async session factory (reuse your app's ORM session)
 ConfigurablePgvectorRetriever(session_factory=async_session_factory, table="kb")
+```
+
+For permission scoping (ACL / visibility), inject a `where_builder` that
+adds parameterised WHERE predicates based on the per-request context:
+
+```python
+def kb_acl_where_builder(pool, request, base_param_count):
+    # request is the dict passed to search(request={...}); use it to scope.
+    if request is None or "user_id" not in request:
+        return None
+    return ["owner_id = $" + str(base_param_count + 1)], [request["user_id"]]
+
+
+ConfigurablePgvectorRetriever(..., where_builder=kb_acl_where_builder)
 ```
 
 ### Stage 2b: Sparse Retrieval (BM25)

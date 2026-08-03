@@ -51,6 +51,7 @@ class MemoryRetriever:
         top_k: int,
         filters: list[Filter] | None = None,
         timeout: float | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[list[ScoredChunk]]:
         async with self._lock:
             results: list[list[ScoredChunk]] = []

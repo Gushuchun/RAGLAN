@@ -280,6 +280,7 @@ class PipelineContext:
     query: str = ""
     filters: list[Filter] | None = None
     options: SearchOptions = field(default_factory=SearchOptions)
+    request: dict[str, Any] = field(default_factory=dict)
 
     # -- Stage 1: QueryExpander -----------------------------------------------
     expanded_queries: list[str] = field(default_factory=list)

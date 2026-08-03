@@ -21,6 +21,10 @@ class OpenAIEmbedder:
         Optional base URL for OpenAI-compatible proxies.
     api_key:
         Optional API key.  If ``None`` the ``OPENAI_API_KEY`` env var is used.
+    client_factory:
+        Optional callable returning a custom client (e.g. a gateway proxy
+        implementing ``embeddings.create(input=[...])``).  When provided,
+        overrides the default ``AsyncOpenAI`` construction.
     """
 
     name = "openai_embedder"
@@ -42,11 +46,13 @@ class OpenAIEmbedder:
         batch_size: int = 100,
         base_url: str | None = None,
         api_key: str | None = None,
+        client_factory: Any | None = None,
     ) -> None:
         self._model = model
         self._batch_size = batch_size
         self._base_url = base_url
         self._api_key = api_key
+        self._client_factory = client_factory
         self._client: Any = None
         self.dimension = self._DIMENSIONS.get(model, 1536)
 
@@ -69,6 +75,9 @@ class OpenAIEmbedder:
 
     def _get_client(self) -> Any:
         if self._client is not None:
+            return self._client
+        if self._client_factory is not None:
+            self._client = self._client_factory()
             return self._client
         from raglan._lazy import _import_module
 

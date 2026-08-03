@@ -22,6 +22,7 @@ from raglan.fusion.rrf import RRFFusion
 from raglan.pipeline import Pipeline
 from raglan.protocols import Middleware
 from raglan.retrievers.bm25 import BM25Retriever
+from raglan.types import ScoredChunk
 
 
 class _PassthroughMiddleware(Middleware):
@@ -274,7 +275,9 @@ class TestRegisterComponent:
             name = "custom_retriever"
             requires_embeddings = False
 
-            async def retrieve(self, queries, embeddings, top_k, filters=None, timeout=None):
+            async def retrieve(
+                self, queries, embeddings, top_k, filters=None, timeout=None, request=None
+            ):
                 return [[] for _ in queries]
 
             async def index(self, chunks):
@@ -380,3 +383,123 @@ class TestSqlAlchemyMode:
         )
         assert r._using_sqlalchemy is True
         assert r._pool is None
+
+
+# ---------------------------------------------------------------------------
+# Enhancement set — request context, where_builder, client_factory
+# ---------------------------------------------------------------------------
+
+
+class _RequestProbeRetriever:
+    """Retriever that captures the request dict passed to retrieve()."""
+
+    name = "probe"
+    requires_embeddings = False
+
+    def __init__(self):
+        self.seen_request = None
+
+    async def retrieve(self, queries, embeddings, top_k, filters=None, timeout=None, request=None):
+        self.seen_request = request
+        return [[ScoredChunk(chunk_id="d", content="c", score=1.0)] for _ in queries]
+
+    async def index(self, chunks):
+        pass
+
+    async def add(self, chunks):
+        pass
+
+    async def remove(self, chunk_ids):
+        pass
+
+
+class TestRequestContext:
+    @pytest.mark.asyncio
+    async def test_request_forwarded_to_retriever(self):
+        """Pipeline.run(request=...) reaches Retriever.retrieve(request=...)."""
+        probe = _RequestProbeRetriever()
+        pipeline = Pipeline([IdentityExpander(), probe, RRFFusion(), PassthroughBuilder()])
+        await pipeline.run("hello", request={"user_id": "u1", "agent_id": "a1"})
+        assert probe.seen_request == {"user_id": "u1", "agent_id": "a1"}
+
+    @pytest.mark.asyncio
+    async def test_request_none_when_omitted(self):
+        """Without request, retrieve() receives None (not empty dict)."""
+        probe = _RequestProbeRetriever()
+        pipeline = Pipeline([IdentityExpander(), probe, RRFFusion(), PassthroughBuilder()])
+        await pipeline.run("hello")
+        assert probe.seen_request is None
+
+
+class TestWhereBuilder:
+    @pytest.mark.asyncio
+    async def test_where_builder_injects_predicates(self):
+        """where_builder(session, request, base) adds parameterised WHERE."""
+        from raglan.retrievers.configurable_pgvector import ConfigurablePgvectorRetriever
+
+        seen: dict = {}
+
+        def wb(pool, request, base):
+            seen["base"] = base
+            seen["request"] = request
+            return ["metadata->>'owner' = $3"], ["u1"]
+
+        r = ConfigurablePgvectorRetriever(
+            table="kb",
+            id_column="id",
+            content_column="content",
+            embedding_column="embedding",
+            where_builder=wb,
+        )
+
+        class _FakePool:
+            async def fetch(self, sql, *params, timeout=None):
+                seen["sql"] = sql
+                seen["params"] = params
+                return []
+
+        r._pool = _FakePool()
+        r._initialised = True
+        await r.retrieve(["q"], [[0.1]], 5, request={"user_id": "u1"})
+
+        assert seen["base"] == 2  # $1=vector, $2=top_k
+        assert seen["request"] == {"user_id": "u1"}
+        assert "owner" in seen["sql"]
+        assert seen["params"] == ("[0.1]", 5, "u1")
+
+    @pytest.mark.asyncio
+    async def test_where_builder_none_is_ok(self):
+        from raglan.retrievers.configurable_pgvector import ConfigurablePgvectorRetriever
+
+        r = ConfigurablePgvectorRetriever(
+            table="kb", id_column="id", content_column="content", embedding_column="embedding"
+        )
+        assert r._where_builder is None
+
+
+class TestClientFactory:
+    def test_embedder_uses_client_factory(self):
+        from raglan.embedders.openai import OpenAIEmbedder
+
+        calls = {"n": 0}
+
+        def make():
+            calls["n"] += 1
+            return object()
+
+        e = OpenAIEmbedder(model="m", client_factory=make)
+        e._get_client()
+        assert calls["n"] == 1
+
+    def test_expander_uses_client_factory(self):
+        from raglan.expanders.openai import OpenAIExpander
+
+        calls = {"n": 0}
+
+        def make():
+            calls["n"] += 1
+            return object()
+
+        x = OpenAIExpander(model="m", client_factory=make)
+        x._get_client()
+        assert calls["n"] == 1

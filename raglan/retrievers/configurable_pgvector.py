@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, ClassVar
 
 from raglan.exceptions import ConfigurationError, FilterError
@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 # Only allow schema-qualified identifiers: letters, digits, underscore, dot
 _SQL_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
+
+# Injects extra parameterised WHERE predicates.
+# (session_or_pool, request, base_param_count) -> (predicates_with_$N, extra_params) | None
+_WhereBuilder = Callable[[Any, dict[str, Any] | None, int], tuple[list[str], list[Any]] | None]
 
 
 def _validate_sql_identifier(name: str, label: str) -> None:
@@ -100,6 +104,7 @@ class ConfigurablePgvectorRetriever:
         distance_metric: str = "cosine",
         connection_pool: Any | None = None,
         session_factory: Any | None = None,
+        where_builder: _WhereBuilder | None = None,
     ) -> None:
         if distance_metric not in self._DISTANCE_MAP:
             raise ValueError(
@@ -133,6 +138,11 @@ class ConfigurablePgvectorRetriever:
         self._session_factory = session_factory
         self._using_sqlalchemy = session_factory is not None
 
+        # Optional callback injecting extra parameterised WHERE predicates.
+        # Signature: (session_or_pool, request, base_param_count) ->
+        # (predicates_with_$N, extra_params) | None.
+        self._where_builder = where_builder
+
         # Lazy-init flag
         self._initialised = False
 
@@ -147,10 +157,27 @@ class ConfigurablePgvectorRetriever:
         top_k: int,
         filters: list[Filter] | None = None,
         timeout: float | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[list[ScoredChunk]]:
-        """Search each embedding vector and return the top *top_k* chunks."""
+        """Search each embedding vector and return the top *top_k* chunks.
+
+        *request* is passed to the configured ``where_builder`` (if any) so
+        it can inject permission-scoping predicates (e.g. visibility/ACL).
+        """
         await self._ensure_pool()
         filter_clause, filter_params = self._build_filter(filters)
+
+        # Optional where_builder injects extra parameterised predicates.
+        extra_predicates: list[str] = []
+        extra_params: list[Any] = []
+        if self._where_builder is not None:
+            base_count = 2 + len(filter_params)  # $1=vector, $2=top_k, then filters
+            built = self._where_builder(self._pool, request, base_count)
+            if built:
+                extra_predicates, extra_params = built
+
+        where_parts = [filter_clause, *extra_predicates]
+        where_clause = " AND ".join(where_parts) if where_parts else "TRUE"
 
         results: list[list[ScoredChunk]] = []
         for emb in embeddings:
@@ -160,11 +187,11 @@ class ConfigurablePgvectorRetriever:
                 f"SELECT {self._id_col}, {self._content_col}, {parent_sel}, "  # nosec B608
                 f"1 - ({self._embedding_col} {self._dist_op} $1::vector) AS score "
                 f"FROM {self._table} "
-                f"WHERE {filter_clause} "
+                f"WHERE {where_clause} "
                 f"ORDER BY {self._embedding_col} {self._dist_op} $1::vector "
                 f"LIMIT $2"
             )
-            params = [vec_str, top_k, *filter_params]
+            params = [vec_str, top_k, *filter_params, *extra_params]
 
             rows = await self._fetch_all(sql, params, timeout=timeout)
             results.append(

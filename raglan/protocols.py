@@ -84,6 +84,7 @@ class Retriever(Protocol):
         top_k: int,
         filters: list[Filter] | None = None,
         timeout: float | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[list[ScoredChunk]]: ...
 
 

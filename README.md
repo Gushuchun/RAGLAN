@@ -207,6 +207,12 @@ rag = (
 )
 
 results, trace = await rag.search("damaged order return policy")
+
+# Pass request-scoped context (identity, tenant, permissions) down to retrievers
+results, trace = await rag.search(
+    "damaged order return policy",
+    request={"user_id": "u123", "tenant": "acme"},
+)
 ```
 
 ## Design Philosophy

@@ -71,6 +71,7 @@ class Pipeline:
         filters: list[Any] | None = None,
         options: SearchOptions | None = None,
         metadata: dict[str, Any] | None = None,
+        request: dict[str, Any] | None = None,
         timeout: float | None = None,
         trace_level: str | None = None,
     ) -> tuple[list[Any], Trace]:
@@ -78,6 +79,9 @@ class Pipeline:
 
         Parameters
         ----------
+        request:
+            Request-scoped context (identity, tenant, permissions, ...) made
+            available to stages, notably retrievers via ``retrieve(request=...)``.
         timeout:
             Global deadline in seconds for the entire pipeline run.
             When exceeded a ``TimeoutError`` degradation is recorded and
@@ -91,6 +95,7 @@ class Pipeline:
             filters=filters or [],
             options=options or SearchOptions(),
             metadata=metadata or {},
+            request=request or {},
             started_at=_time.monotonic(),
         )
 
@@ -245,6 +250,7 @@ async def _handle_retriever(stage: Any, ctx: PipelineContext) -> PipelineContext
         top_k=top_k,
         filters=ctx.filters if ctx.filters else None,
         timeout=ctx.options.retriever_timeout,
+        request=ctx.request or None,
     )
     ctx.retriever_results[name] = results
     return ctx
